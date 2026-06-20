@@ -201,8 +201,8 @@ public class MainView {
                 int success = 0, fail = 0, skipEmpty = 0;
                 List<String> failDetails = new ArrayList<>();
 
-                // 记录成功导出的 ETF（供后续入库使用）
-                List<ExportOk> exported = new ArrayList<>();
+                // 记录成功导出的 ETF（内存传递，避免 CSV 重读）
+                List<ExportData> exportDataList = new ArrayList<>();
 
                 for (EtfScanner.EtfEntry entry : etfs) {
                     Market market = entry.market();
@@ -243,7 +243,7 @@ public class MainView {
                         appendLog("[OK] " + market.getCode() + code
                                 + " " + name
                                 + " → " + csvName + xdxInfo);
-                        exported.add(new ExportOk(market.getCode(), code, name, csvFile,
+                        exportDataList.add(new ExportData(market.getCode(), code, name, adjBars,
                                 OracleDbWriter.hashXdxRecords(xdxRecords)));
                         success++;
 
@@ -273,8 +273,16 @@ public class MainView {
                 }
 
                 // ── 导入 Oracle 数据库 ──────────────────────────────────
-                if (!exported.isEmpty()) {
-                    importToDatabase(tdxRoot, exported);
+                if (!exportDataList.isEmpty()) {
+                    // 统计 CSV 总记录数
+                    long csvTotalRows = 0;
+                    for (ExportData d : exportDataList) {
+                        csvTotalRows += d.adjBars.size();
+                    }
+                    appendLog("─".repeat(60));
+                    appendLog("CSV 总记录数: " + csvTotalRows + " 条（不含表头）");
+
+                    importToDatabase(exportDataList);
                 }
 
                 return null;
@@ -286,63 +294,99 @@ public class MainView {
     // 导入 Oracle 数据库
     // ─────────────────────────────────────────────────────────────────────
 
-    private void importToDatabase(File tdxRoot, List<ExportOk> exported) {
-        appendLog("─".repeat(60));
+    private void importToDatabase(List<ExportData> dataList) {
         appendLog("▶ 开始导入 Oracle 数据库...");
 
         try {
-            OracleDbWriter writer = new OracleDbWriter(DbConfig.load());
+            OracleDbWriter writer = new OracleDbWriter(DbConfig.load(), this::appendLog);
 
-            int totalWritten = 0;
-            for (ExportOk e : exported) {
-                try {
-                    Market market = Market.fromCode(e.marketCode);
-                    int written = writer.importCsv(e.csvFile, market, e.code, e.gbbqHash);
-                    totalWritten += written;
-                } catch (Exception ex) {
-                    appendLog("[DB-ERR] " + e.marketCode + e.code + " " + e.name
-                            + " — " + ex.getMessage());
-                }
+            // 构建 ImportItem 列表
+            List<OracleDbWriter.ImportItem> items = new ArrayList<>();
+            for (ExportData d : dataList) {
+                items.add(new OracleDbWriter.ImportItem(
+                        d.marketCode, d.code, d.name, d.adjBars, d.gbbqHash));
             }
 
-            // 汇总日志
-            appendLog("  写入行数: " + totalWritten);
-            appendLog("  跳过(无变化): " + writer.getSkippedCount());
+            writer.importAll(items);
 
+            // 汇总
+            appendLog("─".repeat(60));
             if (writer.getNewEtfCount() > 0) {
-                appendLog("  🆕 新上市 ETF (" + writer.getNewEtfCount() + "只)：");
-                for (String d : writer.getNewEtfDetails()) {
-                    appendLog("    · " + d);
-                }
-            }
-            if (writer.getGbbqChangedCount() > 0) {
-                appendLog("  ⚠ 股本变迁，已重算前复权 (" + writer.getGbbqChangedCount() + "只)：");
-                for (String d : writer.getGbbqChangedDetails()) {
-                    appendLog("    · " + d);
-                }
+                appendLog("  🆕 新上市: " + writer.getNewEtfCount() + "只");
             }
             if (writer.getCatchUpCount() > 0) {
-                appendLog("  📅 补充漏交易日数据 (" + writer.getCatchUpCount() + "天)：");
-                for (String d : writer.getCatchUpDetails()) {
-                    appendLog("    · " + d);
-                }
+                appendLog("  📅 补漏: " + writer.getCatchUpCount() + "天");
+            }
+
+            // —— CSV vs Oracle 记录数校验 ——
+            int dbRows = writer.countDbRows();
+            long csvRows = dataList.stream().mapToLong(d -> d.adjBars.size()).sum();
+            appendLog("─".repeat(60));
+            appendLog("📊 数据校验：CSV=" + csvRows + " 条  Oracle=" + dbRows + " 条");
+
+            if (csvRows != dbRows) {
+                appendLog("⚠ 数据不一致，开始自动修复...");
+                int repaired = repairMismatch(writer, dataList, csvRows);
+                dbRows = writer.countDbRows();
+                csvRows = dataList.stream().mapToLong(d -> d.adjBars.size()).sum();
+                appendLog("📊 修复后：CSV=" + csvRows + " 条  Oracle=" + dbRows + " 条  "
+                        + (csvRows == dbRows ? "✅ 一致" : "⚠ 修复" + repaired + "行，差异=" + Math.abs(csvRows - dbRows) + " 条"));
+            } else {
+                appendLog("📊 数据校验 ✅ 一致");
             }
 
             writer.close();
-            appendLog("✅ 数据库导入完成");
 
         } catch (Exception ex) {
             appendLog("❌ 数据库连接失败: " + ex.getMessage());
-            appendLog("   请检查 Oracle 连接配置（环境变量 TDX_DB_URL / TDX_DB_USER / TDX_DB_PASSWORD）");
+            appendLog("   请检查 Oracle 连接配置（TDX_DB_URL / TDX_DB_USER / TDX_DB_PASSWORD）");
+        }
+    }
+
+    /**
+     * 当 CSV 与 Oracle 总记录数不一致时，按股票粒度找出缺数据的 ETF 并强制重导。
+     */
+    private int repairMismatch(OracleDbWriter writer, List<ExportData> dataList,
+                               long csvTotal) {
+        try {
+            Map<String, Integer> dbCounts = writer.countDbRowsByStock();
+            int repaired = 0;
+
+            for (ExportData d : dataList) {
+                String key = d.marketCode + "|" + d.code;
+                int dbCnt = dbCounts.getOrDefault(key, 0);
+                int csvCnt = d.adjBars.size();
+
+                if (dbCnt != csvCnt) {
+                    try {
+                        int written = writer.forceReimport(
+                                Market.fromCode(d.marketCode), d.code, d.name,
+                                d.adjBars, d.gbbqHash);
+                        repaired += written;
+                        appendLog("  🔧 修复 " + key + " " + d.name
+                                + "  DB=" + dbCnt + " → CSV=" + csvCnt + " 写入" + written + "行");
+                    } catch (Exception ex) {
+                        appendLog("  ❌ 修复失败 " + key + " " + ex.getMessage());
+                    }
+                }
+            }
+
+            appendLog("─".repeat(60));
+            appendLog("🔧 自动修复完成：重导 " + repaired + " 行");
+            return repaired;
+
+        } catch (Exception ex) {
+            appendLog("❌ 修复过程异常: " + ex.getMessage());
+            return 0;
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 进口（记录导出成功条目的类型在匿名类中无法直接用）
+    // 导出数据 DTO（内存传递）
     // ─────────────────────────────────────────────────────────────────────
 
-    private record ExportOk(String marketCode, String code, String name,
-                            File csvFile, String gbbqHash) {}
+    private record ExportData(String marketCode, String code, String name,
+                              List<AdjustedBar> adjBars, String gbbqHash) {}
 
     // ─────────────────────────────────────────────────────────────────────
     // 日志（线程安全）
