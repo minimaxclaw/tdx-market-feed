@@ -196,11 +196,11 @@ public class OracleDbWriter {
 
     /** 强制全量重导（先删后插），用于一致性修复 */
     public int forceReimport(Market market, String code, String name,
-                             List<AdjustedBar> bars, String gbbqHash) throws Exception {
+                             List<AdjustedBar> bars, String gbbqHash, String status) throws Exception {
         if (bars == null || bars.isEmpty()) return 0;
         String latest = String.valueOf(bars.get(bars.size() - 1).getDate());
         deleteStockData(market.getCode(), code);
-        int written = singleMerge(new ImportItem(market.getCode(), code, name, bars, gbbqHash), bars);
+        int written = singleMerge(new ImportItem(market.getCode(), code, name, bars, gbbqHash, status), bars);
         upsertTrack(market.getCode(), code, gbbqHash, latest);
         conn.commit();
         return written;
@@ -273,7 +273,7 @@ public class OracleDbWriter {
         ps.setBigDecimal(idx++, bd(bar.getAmount()));
         ps.setBigDecimal(idx++, bd(computeChangePct(item.bars, barIdx)));
         ps.setString(idx++, item.latestTradeDate);
-        ps.setString(idx++, "A");
+        ps.setString(idx++, item.status);
     }
 
     // ══════ 涨幅 ══════
@@ -360,6 +360,7 @@ public class OracleDbWriter {
         final String name;
         final List<AdjustedBar> bars;
         final String gbbqHash;
+        final String status;   // "A" 活跃 / "D" 退市
 
         // 内部使用
         String latestTradeDate;
@@ -367,12 +368,13 @@ public class OracleDbWriter {
         List<Integer> toImport;  // bar 索引列表，避免 indexOf
 
         public ImportItem(String marketCode, String code, String name,
-                          List<AdjustedBar> bars, String gbbqHash) {
+                          List<AdjustedBar> bars, String gbbqHash, String status) {
             this.marketCode = marketCode;
             this.code       = code;
             this.name       = name;
             this.bars       = bars;
             this.gbbqHash   = gbbqHash;
+            this.status     = status;
         }
 
         String tag() { return marketCode + code + " " + name; }

@@ -209,9 +209,10 @@ public class MainView {
                     String code   = entry.code();
                     File   dayFile = entry.dayFile();
 
-                    // 名称解析（找不到时用代码代替）
+                    // 名称解析（找不到时用代码代替 — 退市ETF）
                     Map<String, String> nameMap = (market == Market.SH) ? shNames : szNames;
                     String name = nameMap.getOrDefault(code, code);
+                    String status = nameMap.containsKey(code) ? "A" : "D";
 
                     try {
                         // 读取原始日线
@@ -244,7 +245,7 @@ public class MainView {
                                 + " " + name
                                 + " → " + csvName + xdxInfo);
                         exportDataList.add(new ExportData(market.getCode(), code, name, adjBars,
-                                OracleDbWriter.hashXdxRecords(xdxRecords)));
+                                OracleDbWriter.hashXdxRecords(xdxRecords), status));
                         success++;
 
                     } catch (Exception ex) {
@@ -304,7 +305,7 @@ public class MainView {
             List<OracleDbWriter.ImportItem> items = new ArrayList<>();
             for (ExportData d : dataList) {
                 items.add(new OracleDbWriter.ImportItem(
-                        d.marketCode, d.code, d.name, d.adjBars, d.gbbqHash));
+                        d.marketCode, d.code, d.name, d.adjBars, d.gbbqHash, d.status));
             }
 
             writer.importAll(items);
@@ -361,7 +362,7 @@ public class MainView {
                     try {
                         int written = writer.forceReimport(
                                 Market.fromCode(d.marketCode), d.code, d.name,
-                                d.adjBars, d.gbbqHash);
+                                d.adjBars, d.gbbqHash, d.status);
                         repaired += written;
                         appendLog("  🔧 修复 " + key + " " + d.name
                                 + "  DB=" + dbCnt + " → CSV=" + csvCnt + " 写入" + written + "行");
@@ -386,7 +387,7 @@ public class MainView {
     // ─────────────────────────────────────────────────────────────────────
 
     private record ExportData(String marketCode, String code, String name,
-                              List<AdjustedBar> adjBars, String gbbqHash) {}
+                              List<AdjustedBar> adjBars, String gbbqHash, String status) {}
 
     // ─────────────────────────────────────────────────────────────────────
     // 日志（线程安全）
