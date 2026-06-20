@@ -201,6 +201,9 @@ public class MainView {
                 int success = 0, fail = 0, skipEmpty = 0;
                 List<String> failDetails = new ArrayList<>();
 
+                // 记录成功导出的 ETF（供后续入库使用）
+                List<ExportOk> exported = new ArrayList<>();
+
                 for (EtfScanner.EtfEntry entry : etfs) {
                     Market market = entry.market();
                     String code   = entry.code();
@@ -240,6 +243,8 @@ public class MainView {
                         appendLog("[OK] " + market.getCode() + code
                                 + " " + name
                                 + " → " + csvName + xdxInfo);
+                        exported.add(new ExportOk(market.getCode(), code, name, csvFile,
+                                OracleDbWriter.hashXdxRecords(xdxRecords)));
                         success++;
 
                     } catch (Exception ex) {
@@ -267,10 +272,77 @@ public class MainView {
                     }
                 }
 
+                // ── 导入 Oracle 数据库 ──────────────────────────────────
+                if (!exported.isEmpty()) {
+                    importToDatabase(tdxRoot, exported);
+                }
+
                 return null;
             }
         };
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 导入 Oracle 数据库
+    // ─────────────────────────────────────────────────────────────────────
+
+    private void importToDatabase(File tdxRoot, List<ExportOk> exported) {
+        appendLog("─".repeat(60));
+        appendLog("▶ 开始导入 Oracle 数据库...");
+
+        try {
+            OracleDbWriter writer = new OracleDbWriter(DbConfig.load());
+
+            int totalWritten = 0;
+            for (ExportOk e : exported) {
+                try {
+                    Market market = Market.fromCode(e.marketCode);
+                    int written = writer.importCsv(e.csvFile, market, e.code, e.gbbqHash);
+                    totalWritten += written;
+                } catch (Exception ex) {
+                    appendLog("[DB-ERR] " + e.marketCode + e.code + " " + e.name
+                            + " — " + ex.getMessage());
+                }
+            }
+
+            // 汇总日志
+            appendLog("  写入行数: " + totalWritten);
+            appendLog("  跳过(无变化): " + writer.getSkippedCount());
+
+            if (writer.getNewEtfCount() > 0) {
+                appendLog("  🆕 新上市 ETF (" + writer.getNewEtfCount() + "只)：");
+                for (String d : writer.getNewEtfDetails()) {
+                    appendLog("    · " + d);
+                }
+            }
+            if (writer.getGbbqChangedCount() > 0) {
+                appendLog("  ⚠ 股本变迁，已重算前复权 (" + writer.getGbbqChangedCount() + "只)：");
+                for (String d : writer.getGbbqChangedDetails()) {
+                    appendLog("    · " + d);
+                }
+            }
+            if (writer.getCatchUpCount() > 0) {
+                appendLog("  📅 补充漏交易日数据 (" + writer.getCatchUpCount() + "天)：");
+                for (String d : writer.getCatchUpDetails()) {
+                    appendLog("    · " + d);
+                }
+            }
+
+            writer.close();
+            appendLog("✅ 数据库导入完成");
+
+        } catch (Exception ex) {
+            appendLog("❌ 数据库连接失败: " + ex.getMessage());
+            appendLog("   请检查 Oracle 连接配置（环境变量 TDX_DB_URL / TDX_DB_USER / TDX_DB_PASSWORD）");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 进口（记录导出成功条目的类型在匿名类中无法直接用）
+    // ─────────────────────────────────────────────────────────────────────
+
+    private record ExportOk(String marketCode, String code, String name,
+                            File csvFile, String gbbqHash) {}
 
     // ─────────────────────────────────────────────────────────────────────
     // 日志（线程安全）

@@ -31,4 +31,11 @@ public enum Market {
         }
         throw new IllegalArgumentException("未知市场目录名: " + dirName);
     }
+
+    public static Market fromCode(String code) {
+        for (Market m : values()) {
+            if (m.code.equalsIgnoreCase(code)) return m;
+        }
+        throw new IllegalArgumentException("未知市场代码: " + code);
+    }
 }
