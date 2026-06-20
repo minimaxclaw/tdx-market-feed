@@ -31,6 +31,6 @@ public class AdjustedBar {
     public double getAdjLow()   { return adjLow;    }
     public double getAdjClose() { return adjClose;  }
     public float  getAmount()   { return raw.getAmount(); }
-    public int    getVolume()   { return raw.getVolume(); }
+    public long   getVolume()   { return raw.getVolume(); }
     public double getFactor()   { return factor;    }
 }

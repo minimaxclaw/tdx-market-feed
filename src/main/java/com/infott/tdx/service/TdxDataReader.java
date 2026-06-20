@@ -52,7 +52,7 @@ public class TdxDataReader {
                 int   lowI   = readLEInt(raf);
                 int   closeI = readLEInt(raf);
                 float amount = readLEFloat(raf);
-                int   volume = readLEInt(raf);
+                long  volume = readLEUInt(raf);
                 readLEInt(raf);   // reserved, skip
 
                 if (date <= 0) continue;
@@ -80,6 +80,16 @@ public class TdxDataReader {
              | ((b[1] & 0xFF) << 8)
              | ((b[2] & 0xFF) << 16)
              | ((b[3] & 0xFF) << 24);
+    }
+
+    /** 读取 4 字节小端「无符号」整数为 long（成交量可达数十亿，超出 int 范围） */
+    private long readLEUInt(RandomAccessFile raf) throws IOException {
+        byte[] b = new byte[4];
+        raf.readFully(b);
+        return (b[0] & 0xFFL)
+             | ((b[1] & 0xFFL) << 8)
+             | ((b[2] & 0xFFL) << 16)
+             | ((b[3] & 0xFFL) << 24);
     }
 
     private float readLEFloat(RandomAccessFile raf) throws IOException {

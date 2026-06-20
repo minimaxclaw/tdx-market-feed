@@ -16,7 +16,7 @@ import java.util.List;
  * 将前复权 K 线数据导出为 CSV 文件（UTF-8，无 BOM）。
  *
  * CSV 列顺序：
- *   交易日, 市场, 股票代码, 股票名称, 开盘价, 收盘价, 最高价, 最低价, 成交额, 成交量
+ *   交易日, 市场, 股票代码, 股票名称, 开盘价, 最高价, 最低价, 收盘价, 成交量, 成交额, 涨幅
  *
  * 提供两种导出模式：
  *   exportAll()       : 全量写入，覆盖整个文件
@@ -26,7 +26,7 @@ public class CsvExporter {
 
     public static final String[] HEADERS = {
             "交易日", "市场", "股票代码", "股票名称",
-            "开盘价", "收盘价", "最高价", "最低价", "成交额", "成交量"
+            "开盘价", "最高价", "最低价", "收盘价", "成交量", "成交额", "涨幅"
     };
 
     private static final CSVFormat WRITE_FORMAT = CSVFormat.DEFAULT.builder()
@@ -42,36 +42,57 @@ public class CsvExporter {
 
     /**
      * 全量导出：覆盖整个文件，写出所有 bar。
+     * 涨幅 = (当日收盘 - 前一日收盘) / 前一日收盘 × 100，首日使用开盘价代替前日收盘。
      */
     public void exportAll(File csvFile, Market market, String code, String name,
                           List<AdjustedBar> bars) throws IOException {
         ensureParentDir(csvFile);
         try (CSVPrinter printer = buildPrinter(csvFile, false)) {
-            for (AdjustedBar bar : bars) {
-                printRecord(printer, market, code, name, bar);
+            for (int i = 0; i < bars.size(); i++) {
+                AdjustedBar bar = bars.get(i);
+                String change = computeChange(bars, i);
+                printRecord(printer, market, code, name, bar, change);
             }
         }
     }
 
+    /** 计算涨幅：首日=(收盘-开盘)/开盘，其后=(收盘-前收)/前收 */
+    static String computeChange(List<AdjustedBar> bars, int idx) {
+        AdjustedBar bar = bars.get(idx);
+        double close = bar.getAdjClose();
+        double prev;
+        if (idx == 0) {
+            prev = bar.getAdjOpen();
+        } else {
+            prev = bars.get(idx - 1).getAdjClose();
+        }
+        if (prev <= 0) return "0.00";
+        double pct = (close - prev) / prev * 100.0;
+        return String.format("%.2f", pct);
+    }
+
     /**
      * 仅导出当天（最新一条）：
-     *   - 文件不存在 → 新建并写入
-     *   - 文件已存在 → 过滤掉同日期的旧行，追加新行（保留历史）
+     *   - 文件不存在 → 新建并写入，涨幅用首日公式
+     *   - 文件已存在 → 过滤掉同日期的旧行，根据前一天收盘价计算涨幅
      */
     public void exportLatestDay(File csvFile, Market market, String code, String name,
                                 AdjustedBar latestBar) throws IOException {
         ensureParentDir(csvFile);
 
+        String todayStr = String.valueOf(latestBar.getDate());
+
         if (!csvFile.exists()) {
             try (CSVPrinter printer = buildPrinter(csvFile, false)) {
-                printRecord(printer, market, code, name, latestBar);
+                String change = fmtChangePct(latestBar.getAdjClose(), latestBar.getAdjOpen());
+                printRecord(printer, market, code, name, latestBar, change);
             }
             return;
         }
 
-        // 读取已有行，跳过与 latestBar 日期相同的旧行
-        String todayStr = String.valueOf(latestBar.getDate());
+        // 读取已有行，跳过与 latestBar 日期相同的旧行，同时记录前一天收盘价
         List<String[]> kept = new ArrayList<>();
+        String prevClose = null;
 
         try (BufferedReader br = new BufferedReader(
                 new InputStreamReader(new FileInputStream(csvFile), StandardCharsets.UTF_8));
@@ -80,16 +101,26 @@ public class CsvExporter {
             for (CSVRecord rec : parser) {
                 if (!rec.get("交易日").trim().equals(todayStr)) {
                     kept.add(toArray(rec));
+                    prevClose = rec.get("收盘价").trim();  // 保留最后一条（最新的一条旧数据）
                 }
             }
         }
+
+        // 涨幅：有前日收盘 → 用前日收盘；否则首日公式
+        double prev;
+        if (prevClose != null && !prevClose.isEmpty()) {
+            prev = Double.parseDouble(prevClose);
+        } else {
+            prev = latestBar.getAdjOpen();
+        }
+        String change = fmtChangePct(latestBar.getAdjClose(), prev);
 
         // 重写：历史行 + 最新行
         try (CSVPrinter printer = buildPrinter(csvFile, false)) {
             for (String[] row : kept) {
                 printer.printRecord((Object[]) row);
             }
-            printRecord(printer, market, code, name, latestBar);
+            printRecord(printer, market, code, name, latestBar, change);
         }
     }
 
@@ -98,18 +129,19 @@ public class CsvExporter {
     // ─────────────────────────────────────────────────────────────────
 
     private void printRecord(CSVPrinter printer, Market market, String code,
-                             String name, AdjustedBar bar) throws IOException {
+                             String name, AdjustedBar bar, String change) throws IOException {
         printer.printRecord(
                 bar.getDate(),
                 market.getCode(),
                 code,
                 name,
                 fmt3(bar.getAdjOpen()),
-                fmt3(bar.getAdjClose()),
                 fmt3(bar.getAdjHigh()),
                 fmt3(bar.getAdjLow()),
+                fmt3(bar.getAdjClose()),
+                bar.getVolume(),
                 fmt2(bar.getAmount()),
-                bar.getVolume()
+                change
         );
     }
 
@@ -122,8 +154,13 @@ public class CsvExporter {
 
     private String[] toArray(CSVRecord rec) {
         String[] arr = new String[HEADERS.length];
-        for (int i = 0; i < HEADERS.length; i++) {
+        int cols = Math.min(rec.size(), HEADERS.length);
+        for (int i = 0; i < cols; i++) {
             arr[i] = rec.get(i);
+        }
+        // 旧格式 CSV 可能缺少末尾列，用默认值填充
+        for (int i = cols; i < HEADERS.length; i++) {
+            arr[i] = "0.00";
         }
         return arr;
     }
@@ -137,4 +174,10 @@ public class CsvExporter {
 
     private String fmt3(double v) { return String.format("%.3f", v); }
     private String fmt2(float  v) { return String.format("%.2f",  v); }
+
+    private static String fmtChangePct(double close, double prev) {
+        if (prev <= 0) return "0.00";
+        double pct = (close - prev) / prev * 100.0;
+        return String.format("%.2f", pct);
+    }
 }

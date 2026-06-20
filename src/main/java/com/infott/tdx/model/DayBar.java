@@ -17,10 +17,10 @@ public class DayBar {
     private final double low;
     private final double close;
     private final float  amount;
-    private final int    volume;
+    private final long   volume;
 
     public DayBar(int date, double open, double high, double low,
-                  double close, float amount, int volume) {
+                  double close, float amount, long volume) {
         this.date   = date;
         this.open   = open;
         this.high   = high;
@@ -36,7 +36,7 @@ public class DayBar {
     public double getLow()    { return low;    }
     public double getClose()  { return close;  }
     public float  getAmount() { return amount; }
-    public int    getVolume() { return volume; }
+    public long   getVolume() { return volume; }
 
     @Override
     public String toString() {

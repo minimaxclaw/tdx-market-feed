@@ -19,6 +19,7 @@ import javafx.stage.Stage;
 import java.io.File;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -198,17 +199,18 @@ public class MainView {
                 }
 
                 int success = 0, fail = 0, skipEmpty = 0;
+                List<String> failDetails = new ArrayList<>();
 
                 for (EtfScanner.EtfEntry entry : etfs) {
+                    Market market = entry.market();
+                    String code   = entry.code();
+                    File   dayFile = entry.dayFile();
+
+                    // 名称解析（找不到时用代码代替）
+                    Map<String, String> nameMap = (market == Market.SH) ? shNames : szNames;
+                    String name = nameMap.getOrDefault(code, code);
+
                     try {
-                        Market market = entry.market();
-                        String code   = entry.code();
-                        File   dayFile = entry.dayFile();
-
-                        // 名称解析（找不到时用代码代替）
-                        Map<String, String> nameMap = (market == Market.SH) ? shNames : szNames;
-                        String name = nameMap.getOrDefault(code, code);
-
                         // 读取原始日线
                         List<DayBar> bars = reader.readDayFile(dayFile);
                         if (bars.isEmpty()) {
@@ -241,16 +243,29 @@ public class MainView {
                         success++;
 
                     } catch (Exception ex) {
-                        appendLog("[FAIL] " + entry.market().getCode() + entry.code()
-                                + "  " + ex.getMessage());
+                        String reason = ex.getMessage();
+                        if (reason == null || reason.isEmpty()) {
+                            reason = ex.getClass().getSimpleName();
+                        }
+                        String marketCode = market.getCode() + code;
+                        appendLog("[FAIL] " + marketCode + " " + name + "  " + reason);
+                        failDetails.add(marketCode + " " + name + " — " + reason);
                         fail++;
                     }
                 }
 
-                long elapsedMs = Duration.between(start, Instant.now()).toMillis();
+                long elapsedSec = Duration.between(start, Instant.now()).toSeconds();
                 appendLog("─".repeat(60));
-                appendLog(String.format("统计：成功=%d  失败=%d  空文件跳过=%d  总计=%d  耗时=%dms",
-                        success, fail, skipEmpty, etfs.size(), elapsedMs));
+                appendLog(String.format("统计：成功=%d  失败=%d  空文件跳过=%d  总计=%d  耗时=%ds",
+                        success, fail, skipEmpty, etfs.size(), elapsedSec));
+
+                if (!failDetails.isEmpty()) {
+                    appendLog("─".repeat(60));
+                    appendLog("❌ 处理失败的 ETF：");
+                    for (String detail : failDetails) {
+                        appendLog("  · " + detail);
+                    }
+                }
 
                 return null;
             }
