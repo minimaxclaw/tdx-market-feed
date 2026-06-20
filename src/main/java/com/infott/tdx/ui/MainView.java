@@ -26,11 +26,9 @@ import java.util.Map;
 /**
  * 主界面视图
  *
- * 布局：
- *   行1  [通达信目录] TextField  [浏览]
- *   行2  [导出目录]   TextField  [浏览]
- *   行3  [导出] 按钮
- *   行4  日志 TextArea
+ * Tab 1「刷新」：数据导出 + Oracle 入库
+ * Tab 2「三线红」：（预留）
+ * Tab 3「三线白」：（预留）
  */
 public class MainView {
 
@@ -43,7 +41,36 @@ public class MainView {
     private Button    btnExport;
 
     public void show(Stage stage) {
-        stage.setTitle("通达信 ETF 数据导出工具 v1.0");
+        stage.setTitle("通达信 ETF 数据工具 v1.0");
+
+        TabPane tabPane = new TabPane();
+
+        // ── Tab 1：刷新 ────────────────────────────────────────────────
+        Tab refreshTab = new Tab("刷新");
+        refreshTab.setClosable(false);
+        refreshTab.setContent(buildRefreshPane(stage));
+
+        // ── Tab 2：三线红 ──────────────────────────────────────────────
+        Tab redTab = new Tab("三线红");
+        redTab.setClosable(false);
+        redTab.setContent(buildPlaceholder("三线红 — 功能开发中"));
+
+        // ── Tab 3：三线白 ──────────────────────────────────────────────
+        Tab whiteTab = new Tab("三线白");
+        whiteTab.setClosable(false);
+        whiteTab.setContent(buildPlaceholder("三线白 — 功能开发中"));
+
+        tabPane.getTabs().addAll(refreshTab, redTab, whiteTab);
+
+        Scene scene = new Scene(tabPane, 820, 580);
+        stage.setScene(scene);
+        stage.setMinWidth(600);
+        stage.setMinHeight(400);
+        stage.show();
+    }
+
+    /** 构建「刷新」Tab 的内容 */
+    private VBox buildRefreshPane(Stage stage) {
 
         // ── 行1：通达信目录 ──────────────────────────────────────────
         Label lblTdx = new Label("通达信目录：");
@@ -67,18 +94,22 @@ public class MainView {
         HBox row2 = new HBox(8, lblExport, tfExportDir, btnBrowseExport);
         row2.setAlignment(Pos.CENTER_LEFT);
 
-        // ── 行3：导出按钮 + 清除日志按钮 ─────────────────────────────────────────────
-        btnExport = new Button("导出");
+        // ── 行3：按钮栏 ────────────────────────────────────────────────
+        btnExport = new Button("刷新数据");
         btnExport.setStyle("-fx-font-size: 14px;");
-        btnExport.setPrefWidth(110);
+        btnExport.setPrefWidth(100);
         btnExport.setDefaultButton(true);
         btnExport.setOnAction(e -> startExport());
+
+        Button btnCalcRps = new Button("计算RPS");
+        btnCalcRps.setStyle("-fx-font-size: 14px;");
+        btnCalcRps.setOnAction(e -> appendLog("[信息] 计算RPS 功能开发中"));
 
         Button btnClearLog = new Button("清除日志");
         btnClearLog.setStyle("-fx-font-size: 14px;");
         btnClearLog.setOnAction(e -> taLog.clear());
 
-        HBox row3 = new HBox(10, btnExport, btnClearLog);
+        HBox row3 = new HBox(10, btnExport, btnCalcRps, btnClearLog);
         row3.setAlignment(Pos.CENTER_LEFT);
         row3.setPadding(new Insets(0, 0, 0, 88));
 
@@ -90,15 +121,17 @@ public class MainView {
         taLog.setStyle("-fx-font-family: 'Consolas', 'Courier New', monospace; -fx-font-size: 12px;");
         VBox.setVgrow(taLog, Priority.ALWAYS);
 
-        // ── 根布局 ────────────────────────────────────────────────────
-        VBox root = new VBox(10, row1, row2, row3, lblLog, taLog);
-        root.setPadding(new Insets(14));
+        VBox pane = new VBox(10, row1, row2, row3, lblLog, taLog);
+        pane.setPadding(new Insets(14));
+        return pane;
+    }
 
-        Scene scene = new Scene(root, 820, 580);
-        stage.setScene(scene);
-        stage.setMinWidth(600);
-        stage.setMinHeight(400);
-        stage.show();
+    /** 构建占位 Tab 内容 */
+    private VBox buildPlaceholder(String label) {
+        VBox pane = new VBox(new Label(label));
+        pane.setPadding(new Insets(14));
+        pane.setAlignment(Pos.TOP_LEFT);
+        return pane;
     }
 
     // ─────────────────────────────────────────────────────────────────────
