@@ -174,6 +174,15 @@ public class MainView {
                 CsvExporter     exporter  = new CsvExporter();
                 StockNameReader nameReader = new StockNameReader();
 
+                // 加载全局权息库（gbbq），作为 .xdx 缺失时的后备
+                GbbqReader gbbqReader = null;
+                try {
+                    gbbqReader = new GbbqReader(tdxRoot);
+                    appendLog("权息库：从 gbbq 加载 " + gbbqReader.stockCount() + " 只股票");
+                } catch (Exception e) {
+                    appendLog("[信息] 未找到 gbbq 文件，仅尝试读取 .xdx/.qfq");
+                }
+
                 // 加载名称库
                 Map<String, String> shNames = nameReader.readNames(tdxRoot, "sh");
                 Map<String, String> szNames = nameReader.readNames(tdxRoot, "sz");
@@ -207,10 +216,14 @@ public class MainView {
                             continue;
                         }
 
-                        // 读取权息数据
+                        // 读取权息数据（优先 .xdx/.qfq，其次 gbbq）
                         File   ldayDir    = dayFile.getParentFile();
                         String filePrefix = entry.filePrefix();
                         List<XdxRecord> xdxRecords = xdxReader.readXdx(ldayDir, filePrefix);
+
+                        if (xdxRecords.isEmpty() && gbbqReader != null) {
+                            xdxRecords = gbbqReader.getRecords(market, code);
+                        }
 
                         // 计算前复权
                         List<AdjustedBar> adjBars = qfq.calculate(bars, xdxRecords);

@@ -140,8 +140,8 @@ public class QfqCalculator {
 
             double F = (cPre - D + P * A) / denominator;
 
-            // 合理性过滤：因子应在 (0, 2] 范围内
-            if (F <= 0 || F > 2.0) continue;
+            // 合理性过滤：因子应在 (0, 10] 范围内（ETF 份额合并可能 >2.0）
+            if (F <= 0 || F > 10.0) continue;
 
             // 同一除权日多条记录累乘
             result.merge(xdx.getDate(), F, (a, b) -> a * b);

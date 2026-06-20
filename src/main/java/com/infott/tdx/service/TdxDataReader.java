@@ -23,11 +23,13 @@ import java.util.List;
  *   24    4     int     成交量（手）
  *   28    4     int     保留字段
  *
- * 价格读取后须除以 100 得到实际价格。
+ * ETF/Fund 价格读取后须除以 1000 得到实际价格（保留3位小数）。
  */
 public class TdxDataReader {
 
     private static final int RECORD_SIZE = 32;
+    /** ETF 日线文件价格除数（通达信基金/ETF 精度为 0.001 元） */
+    private static final double PRICE_DIVISOR = 1000.0;
 
     /**
      * 读取指定 .day 文件的全部日线数据，按文件顺序返回（通常为升序日期）。
@@ -57,10 +59,10 @@ public class TdxDataReader {
 
                 bars.add(new DayBar(
                         date,
-                        openI  / 100.0,
-                        highI  / 100.0,
-                        lowI   / 100.0,
-                        closeI / 100.0,
+                        openI  / PRICE_DIVISOR,
+                        highI  / PRICE_DIVISOR,
+                        lowI   / PRICE_DIVISOR,
+                        closeI / PRICE_DIVISOR,
                         amount,
                         volume
                 ));

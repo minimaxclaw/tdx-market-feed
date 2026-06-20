@@ -104,10 +104,10 @@ public class CsvExporter {
                 market.getCode(),
                 code,
                 name,
-                fmt3(bar.getAdjOpen()  / 10.0),
-                fmt3(bar.getAdjClose() / 10.0),
-                fmt3(bar.getAdjHigh()  / 10.0),
-                fmt3(bar.getAdjLow()   / 10.0),
+                fmt3(bar.getAdjOpen()),
+                fmt3(bar.getAdjClose()),
+                fmt3(bar.getAdjHigh()),
+                fmt3(bar.getAdjLow()),
                 fmt2(bar.getAmount()),
                 bar.getVolume()
         );
