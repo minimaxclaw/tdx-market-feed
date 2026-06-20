@@ -275,15 +275,14 @@ public class MainView {
 
                 // ── 导入 Oracle 数据库 ──────────────────────────────────
                 if (!exportDataList.isEmpty()) {
-                    // 统计 CSV 总记录数
                     long csvTotalRows = 0;
                     for (ExportData d : exportDataList) {
                         csvTotalRows += d.adjBars.size();
                     }
                     appendLog("─".repeat(60));
-                    appendLog("CSV 总记录数: " + csvTotalRows + " 条（不含表头）");
+                    appendLog("CSV 导出：合计 " + csvTotalRows + " 条  ETF " + exportDataList.size() + " 只");
 
-                    importToDatabase(exportDataList);
+                    importToDatabase(exportDataList, csvTotalRows);
                 }
 
                 return null;
@@ -295,13 +294,13 @@ public class MainView {
     // 导入 Oracle 数据库
     // ─────────────────────────────────────────────────────────────────────
 
-    private void importToDatabase(List<ExportData> dataList) {
+    private void importToDatabase(List<ExportData> dataList, long csvTotalRows) {
         appendLog("▶ 开始导入 Oracle 数据库...");
 
+        long dbStart = System.currentTimeMillis();
         try {
             OracleDbWriter writer = new OracleDbWriter(DbConfig.load(), this::appendLog);
 
-            // 构建 ImportItem 列表
             List<OracleDbWriter.ImportItem> items = new ArrayList<>();
             for (ExportData d : dataList) {
                 items.add(new OracleDbWriter.ImportItem(
@@ -309,32 +308,46 @@ public class MainView {
             }
 
             writer.importAll(items);
-
-            // 汇总
-            appendLog("─".repeat(60));
-            if (writer.getNewEtfCount() > 0) {
-                appendLog("  🆕 新上市: " + writer.getNewEtfCount() + "只");
-            }
-            if (writer.getCatchUpCount() > 0) {
-                appendLog("  📅 补漏: " + writer.getCatchUpCount() + "天");
-            }
+            OracleDbWriter.Stats s = writer.snapshot();
 
             // —— CSV vs Oracle 记录数校验 ——
             int dbRows = writer.countDbRows();
-            long csvRows = dataList.stream().mapToLong(d -> d.adjBars.size()).sum();
             appendLog("─".repeat(60));
-            appendLog("📊 数据校验：CSV=" + csvRows + " 条  Oracle=" + dbRows + " 条");
+            appendLog("📊 数据校验：CSV=" + csvTotalRows + " 条  Oracle=" + dbRows + " 条");
 
-            if (csvRows != dbRows) {
+            if (csvTotalRows != dbRows) {
                 appendLog("⚠ 数据不一致，开始自动修复...");
-                int repaired = repairMismatch(writer, dataList, csvRows);
+                long repairStart = System.currentTimeMillis();
+                int repaired = repairMismatch(writer, dataList, csvTotalRows);
                 dbRows = writer.countDbRows();
-                csvRows = dataList.stream().mapToLong(d -> d.adjBars.size()).sum();
-                appendLog("📊 修复后：CSV=" + csvRows + " 条  Oracle=" + dbRows + " 条  "
-                        + (csvRows == dbRows ? "✅ 一致" : "⚠ 修复" + repaired + "行，差异=" + Math.abs(csvRows - dbRows) + " 条"));
+                appendLog("📊 修复后：CSV=" + csvTotalRows + " 条  Oracle=" + dbRows + " 条  "
+                        + (csvTotalRows == dbRows ? "✅ 一致" : "⚠ 修复" + repaired + "行，差异=" + Math.abs(csvTotalRows - dbRows) + " 条")
+                        + "  耗时 " + formatMs(System.currentTimeMillis() - repairStart));
             } else {
                 appendLog("📊 数据校验 ✅ 一致");
             }
+
+            long dbElapsed = System.currentTimeMillis() - dbStart;
+
+            // —— 汇总面板 ——
+            appendLog(" ");
+            appendLog("  ──────────────────────────────────────────");
+            appendLog("           导 入 完 成 汇 总");
+            appendLog("  ──────────────────────────────────────────");
+            appendLog("   CSV 导出  " + padW(csvTotalRows + " 条", 14) + " ETF " + dataList.size() + " 只");
+            appendLog("   Oracle    " + padW(dbRows + " 条", 14)
+                    + (csvTotalRows == dbRows ? " ✅ 一致" : " ❌ 差异"));
+            appendLog("  ──────────────────────────────────────────");
+            appendLog("   新上市    " + padW(s.newEtfCount() + " 只", 8)
+                    + padW(s.newWritten() + " 行", 10) + colW(formatMs(s.newMs()), 10));
+            appendLog("   补漏      " + padW(s.catchUpCount() + " 天", 8)
+                    + padW(s.catchWritten() + " 行", 10) + colW(formatMs(s.catchMs()), 10));
+            appendLog("   更新当日  " + padW(s.latestCount() + " 只", 8)
+                    + padW(s.latestWritten() + " 行", 10) + colW(formatMs(s.latestMs()), 10));
+            appendLog("  ──────────────────────────────────────────");
+            appendLog("   总写入    " + writer.totalWritten() + " 行");
+            appendLog("   总耗时    " + formatMs(dbElapsed));
+            appendLog("  ──────────────────────────────────────────");
 
             writer.close();
 
@@ -342,6 +355,37 @@ public class MainView {
             appendLog("❌ 数据库连接失败: " + ex.getMessage());
             appendLog("   请检查 Oracle 连接配置（TDX_DB_URL / TDX_DB_USER / TDX_DB_PASSWORD）");
         }
+    }
+
+    /** 按显示宽度填充右侧空格（CJK 字符宽度=2，ASCII=1） */
+    private static String padW(String s, int targetWidth) {
+        int dw = displayWidth(s);
+        StringBuilder sb = new StringBuilder(s);
+        while (dw < targetWidth) { sb.append(' '); dw++; }
+        return sb.toString();
+    }
+
+    /** 按显示宽度填充左侧空格 */
+    private static String colW(String s, int targetWidth) {
+        int dw = displayWidth(s);
+        StringBuilder sb = new StringBuilder();
+        while (dw < targetWidth) { sb.append(' '); dw++; }
+        sb.append(s);
+        return sb.toString();
+    }
+
+    /** 计算字符串的终端显示宽度（CJK/全角=2，ASCII=1） */
+    private static int displayWidth(String s) {
+        int w = 0;
+        for (char c : s.toCharArray()) {
+            if (c > 0x7F) w += 2; else w += 1;
+        }
+        return w;
+    }
+
+    private static String formatMs(long ms) {
+        if (ms < 1000) return ms + "ms";
+        return String.format("%.1fs", ms / 1000.0);
     }
 
     /**

@@ -78,7 +78,8 @@ public class OracleDbWriter {
     private final Consumer<String> log;
 
     // 统计
-    private int newEtfCount, catchUpCount, skippedCount;
+    private int newEtfCount, catchUpCount, latestCount, newWritten, catchWritten, latestWritten;
+    private long newMs, catchMs, latestMs;
     private final List<String> newEtfDetails   = new ArrayList<>();
     private final List<String> catchUpDetails  = new ArrayList<>();
 
@@ -125,22 +126,28 @@ public class OracleDbWriter {
         }
 
         // 3. 执行：全量重导（新上市，逐只处理）
-        log.accept("  ══ 新上市 ETF：" + newEtfs.size() + " 只（全量导入）══");
-        for (ImportItem item : newEtfs) {
-            String tag = item.tag();
-            logRun(tag, "🆕 全量导入 " + item.bars.size() + " 条 → " + item.latestTradeDate);
-            int written = singleMerge(item, item.bars);
-            upsertTrack(item.marketCode, item.code, item.gbbqHash, item.latestTradeDate);
-            conn.commit();
-            newEtfCount++;
-            newEtfDetails.add(tag + " " + item.latestTradeDate);
-            if (item.bars.size() > 365) logRun(tag, "  ↳ 写入 " + written + " 行");
+        if (!newEtfs.isEmpty()) {
+            long t0 = System.currentTimeMillis();
+            log.accept("  ══ 新上市 ETF：" + newEtfs.size() + " 只（全量导入）══");
+            for (ImportItem item : newEtfs) {
+                String tag = item.tag();
+                logRun(tag, "🆕 全量导入 " + item.bars.size() + " 条 → " + item.latestTradeDate);
+                int written = singleMerge(item, item.bars);
+                upsertTrack(item.marketCode, item.code, item.gbbqHash, item.latestTradeDate);
+                conn.commit();
+                newWritten += written;
+                newEtfCount++;
+                newEtfDetails.add(tag + " " + item.latestTradeDate);
+                if (item.bars.size() > 365) logRun(tag, "  ↳ 写入 " + written + " 行");
+            }
+            newMs = System.currentTimeMillis() - t0;
         }
 
         // 4. 执行：补漏（共享 PreparedStatement）
         if (!catchUps.isEmpty()) {
+            long t0 = System.currentTimeMillis();
             log.accept("  ══ 补漏交易日：" + catchUps.size() + " 只 ══");
-            int caughtUp = batchMergeShared(catchUps, true);
+            catchWritten = batchMergeShared(catchUps, true);
             for (ImportItem item : catchUps) {
                 int missed = countDistinctDates(item.toImport);
                 catchUpCount += missed;
@@ -152,17 +159,21 @@ public class OracleDbWriter {
                 upsertTrack(item.marketCode, item.code, item.gbbqHash, item.latestTradeDate);
             }
             conn.commit();
+            catchMs = System.currentTimeMillis() - t0;
         }
 
         // 5. 执行：仅当日（共享 PreparedStatement，最快路径）
         if (!latests.isEmpty()) {
+            long t0 = System.currentTimeMillis();
             log.accept("  ══ 更新当日：" + latests.size() + " 只 ══");
-            batchMergeShared(latests, false);
+            latestWritten = batchMergeShared(latests, false);
             for (ImportItem item : latests) {
                 upsertTrack(item.marketCode, item.code, item.gbbqHash, item.latestTradeDate);
                 logRun(item.tag(), "↻ 更新当日 " + item.latestTradeDate);
             }
             conn.commit();
+            latestCount = latests.size();
+            latestMs = System.currentTimeMillis() - t0;
         }
     }
 
@@ -170,9 +181,25 @@ public class OracleDbWriter {
 
     public int  getNewEtfCount()   { return newEtfCount; }
     public int  getCatchUpCount()  { return catchUpCount; }
-    public int  getSkippedCount()  { return skippedCount; }
+    public int  getLatestCount()   { return latestCount; }
+    public int  getNewWritten()    { return newWritten; }
+    public int  getCatchWritten()  { return catchWritten; }
+    public int  getLatestWritten() { return latestWritten; }
+    public long getNewMs()         { return newMs; }
+    public long getCatchMs()       { return catchMs; }
+    public long getLatestMs()      { return latestMs; }
+    public int totalWritten()      { return newWritten + catchWritten + latestWritten; }
     public List<String> getNewEtfDetails()  { return newEtfDetails; }
     public List<String> getCatchUpDetails() { return catchUpDetails; }
+
+    /** 一站式统计快照 */
+    public Stats snapshot() {
+        return new Stats(newEtfCount, catchUpCount, latestCount,
+                newWritten, catchWritten, latestWritten, newMs, catchMs, latestMs);
+    }
+    public record Stats(int newEtfCount, int catchUpCount, int latestCount,
+                        int newWritten, int catchWritten, int latestWritten,
+                        long newMs, long catchMs, long latestMs) {}
 
     public void close() { try { conn.close(); } catch (SQLException ignored) {} }
 
