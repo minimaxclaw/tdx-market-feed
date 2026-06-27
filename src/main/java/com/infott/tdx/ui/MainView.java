@@ -1,17 +1,20 @@
 package com.infott.tdx.ui;
 
 import com.infott.tdx.model.AdjustedBar;
+import com.infott.tdx.model.CalendarRow;
 import com.infott.tdx.model.DayBar;
 import com.infott.tdx.model.Market;
 import com.infott.tdx.model.XdxRecord;
 import com.infott.tdx.rule.EtfCodeRule;
 import com.infott.tdx.service.*;
 import javafx.application.Platform;
+import javafx.collections.FXCollections;
 import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
@@ -19,6 +22,9 @@ import javafx.stage.Stage;
 import java.io.File;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.Year;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -60,7 +66,12 @@ public class MainView {
         whiteTab.setClosable(false);
         whiteTab.setContent(buildPlaceholder("三线白 — 功能开发中"));
 
-        tabPane.getTabs().addAll(refreshTab, redTab, whiteTab);
+        // ── Tab 4：假期 ──────────────────────────────────────────────
+        Tab holidayTab = new Tab("假期");
+        holidayTab.setClosable(false);
+        holidayTab.setContent(buildHolidayPane(stage));
+
+        tabPane.getTabs().addAll(refreshTab, redTab, whiteTab, holidayTab);
 
         Scene scene = new Scene(tabPane, 820, 580);
         stage.setScene(scene);
@@ -132,6 +143,160 @@ public class MainView {
         pane.setPadding(new Insets(14));
         pane.setAlignment(Pos.TOP_LEFT);
         return pane;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 「假期」Tab
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** 构建「假期」Tab 的内容 */
+    private VBox buildHolidayPane(Stage stage) {
+
+        HolidayCalendarService holidayService = new HolidayCalendarService(this::appendLog);
+
+        // ── 行1：年份输入 + 更新按钮 ──────────────────────────────────
+        Label lblYear = new Label("年份：");
+        lblYear.setMinWidth(80);
+
+        TextField tfYear = new TextField(String.valueOf(Year.now().getValue()));
+        tfYear.setPrefWidth(80);
+
+        Button btnFetch = new Button("更新假期数据");
+        btnFetch.setStyle("-fx-font-size: 14px;");
+
+        HBox row1 = new HBox(8, lblYear, tfYear, btnFetch);
+        row1.setAlignment(Pos.CENTER_LEFT);
+
+        // ── 行2：查询下拉 ────────────────────────────────────────────
+        Label lblQuery = new Label("查询：");
+        lblQuery.setMinWidth(80);
+
+        ComboBox<Integer> cbYear = new ComboBox<>();
+        cbYear.setItems(FXCollections.observableArrayList(HolidayCalendarService.yearRange()));
+        cbYear.setValue(Year.now().getValue());
+
+        HBox row2 = new HBox(8, lblQuery, cbYear);
+        row2.setAlignment(Pos.CENTER_LEFT);
+
+        // ── 行3：结果表格 ─────────────────────────────────────────────
+        TableView<CalendarRow> table = new TableView<>();
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        TableColumn<CalendarRow, String> colDate = new TableColumn<>("日期");
+        colDate.setCellValueFactory(new PropertyValueFactory<>("eventDate"));
+        colDate.setPrefWidth(120);
+
+        TableColumn<CalendarRow, String> colWeekday = new TableColumn<>("星期");
+        colWeekday.setCellValueFactory(new PropertyValueFactory<>("weekday"));
+        colWeekday.setPrefWidth(100);
+
+        TableColumn<CalendarRow, String> colHoliday = new TableColumn<>("假期");
+        colHoliday.setCellValueFactory(new PropertyValueFactory<>("holidayName"));
+        colHoliday.setPrefWidth(200);
+
+        table.getColumns().addAll(colDate, colWeekday, colHoliday);
+        VBox.setVgrow(table, Priority.ALWAYS);
+
+        // ── 事件：更新假期数据 ────────────────────────────────────────
+        btnFetch.setOnAction(e -> {
+            String yearText = tfYear.getText().trim();
+            int year;
+            try {
+                year = Integer.parseInt(yearText);
+            } catch (NumberFormatException ex) {
+                showAlert(Alert.AlertType.ERROR, "错误", "请输入有效的年份数字");
+                return;
+            }
+
+            btnFetch.setDisable(true);
+            appendLog("[信息] 开始更新 " + year + " 年假期数据...");
+
+            Task<Void> task = new Task<>() {
+                @Override
+                protected Void call() throws Exception {
+                    try {
+                        if (holidayService.yearExists(year)) {
+                            Platform.runLater(() -> showAlert(Alert.AlertType.INFORMATION,
+                                    "提示", year + " 年数据已存在，无需重复导入"));
+                            return null;
+                        }
+
+                        Map<LocalDate, String> holidays = holidayService.fetchHolidays(year);
+                        int rows = holidayService.insertYearData(year, holidays);
+
+                        Platform.runLater(() -> {
+                            showAlert(Alert.AlertType.INFORMATION, "成功",
+                                    "成功导入 " + year + " 年数据\n共 " + rows + " 条记录（"
+                                    + holidays.size() + " 天假期）");
+                            // 若 ComboBox 当前选中该年份，刷新表格
+                            if (cbYear.getValue() != null && cbYear.getValue() == year) {
+                                reloadTable(holidayService, year, table);
+                            }
+                        });
+
+                    } catch (Exception ex) {
+                        Platform.runLater(() -> showAlert(Alert.AlertType.ERROR,
+                                "失败", "更新失败: " + ex.getMessage()));
+                        appendLog("[错误] " + year + " 年假期数据更新失败: " + ex.getMessage());
+                    }
+                    return null;
+                }
+            };
+
+            task.setOnSucceeded(e2 -> btnFetch.setDisable(false));
+            task.setOnFailed(e2 -> btnFetch.setDisable(false));
+
+            Thread thread = new Thread(task, "holiday-fetch-thread");
+            thread.setDaemon(true);
+            thread.start();
+        });
+
+        // ── 事件：ComboBox 切换年份 → 查询 DB ────────────────────────
+        cbYear.setOnAction(e -> {
+            int selectedYear = cbYear.getValue();
+            reloadTable(holidayService, selectedYear, table);
+        });
+
+        // 初始加载（当前年份）
+        reloadTable(holidayService, Year.now().getValue(), table);
+
+        VBox pane = new VBox(10, row1, row2, table);
+        pane.setPadding(new Insets(14));
+        return pane;
+    }
+
+    /** 后台查询 tdx_calendar 并刷新 TableView */
+    private void reloadTable(HolidayCalendarService service, int year, TableView<CalendarRow> table) {
+        Task<List<CalendarRow>> queryTask = new Task<>() {
+            @Override
+            protected List<CalendarRow> call() throws Exception {
+                return service.queryYear(year);
+            }
+        };
+        queryTask.setOnSucceeded(e -> {
+            List<CalendarRow> rows = queryTask.getValue();
+            table.setItems(FXCollections.observableArrayList(rows));
+            if (rows.isEmpty()) {
+                appendLog("[信息] " + year + " 年暂无数据，请先点击「更新假期数据」");
+            }
+        });
+        queryTask.setOnFailed(e ->
+                appendLog("[错误] 查询 " + year + " 年数据失败"));
+
+        Thread thread = new Thread(queryTask, "holiday-query-thread");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    /** 弹出提示/错误对话框 */
+    private static void showAlert(Alert.AlertType type, String title, String msg) {
+        Platform.runLater(() -> {
+            Alert alert = new Alert(type);
+            alert.setTitle(title);
+            alert.setHeaderText(null);
+            alert.setContentText(msg);
+            alert.showAndWait();
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -306,8 +471,14 @@ public class MainView {
                     }
                 }
 
-                // ── 导入 Oracle 数据库 ──────────────────────────────────
+                // ── 数据时效性验证 ──────────────────────────────────
+                boolean dataFresh = true;
                 if (!exportDataList.isEmpty()) {
+                    dataFresh = validateDataFreshness(exportDataList);
+                }
+
+                // ── 导入 Oracle 数据库 ──────────────────────────────────
+                if (!exportDataList.isEmpty() && dataFresh) {
                     long csvTotalRows = 0;
                     for (ExportData d : exportDataList) {
                         csvTotalRows += d.adjBars.size();
@@ -316,6 +487,9 @@ public class MainView {
                     appendLog("CSV 导出：合计 " + csvTotalRows + " 条  ETF " + exportDataList.size() + " 只");
 
                     importToDatabase(exportDataList, csvTotalRows);
+                } else if (!exportDataList.isEmpty()) {
+                    appendLog("─".repeat(60));
+                    appendLog("⛔ 已跳过 Oracle 数据库更新（数据未刷新）");
                 }
 
                 return null;
@@ -456,6 +630,74 @@ public class MainView {
         } catch (Exception ex) {
             appendLog("❌ 修复过程异常: " + ex.getMessage());
             return 0;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 数据时效性验证（基于 tdx_calendar 表判断最新数据是否已下载）
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * 验证导出的数据是否包含最新交易日的数据。
+     *
+     * 规则：
+     *   1. 当天是交易日 → 导出的 CSV 中必须有当天数据
+     *   2. 当天不是交易日 → 导出的 CSV 中必须有上一个交易日的数据
+     *
+     * @return true = 数据已是最新，可以继续入库；false = 数据是旧的，应阻断入库
+     */
+    private boolean validateDataFreshness(List<ExportData> dataList) {
+        try {
+            HolidayCalendarService calService = new HolidayCalendarService(this::appendLog);
+            LocalDate today = LocalDate.now();
+            DateTimeFormatter yyyyMMdd = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+            LocalDate targetDate;
+            String reason;
+            if (calService.isTradeDay(today)) {
+                targetDate = today;
+                reason = "今天是交易日（" + today + "）";
+            } else {
+                targetDate = calService.findLastTradeDay(today);
+                reason = "今天不是交易日，上一个交易日为 " + targetDate;
+            }
+
+            int targetDateInt = Integer.parseInt(targetDate.format(yyyyMMdd));
+
+            // 检查是否有任意一只 ETF 包含目标日期的数据
+            boolean hasData = false;
+            for (ExportData d : dataList) {
+                for (AdjustedBar bar : d.adjBars) {
+                    if (bar.getDate() == targetDateInt) {
+                        hasData = true;
+                        break;
+                    }
+                }
+                if (hasData) break;
+            }
+
+            appendLog("─".repeat(60));
+            if (hasData) {
+                appendLog("✅ 数据时效验证通过：" + reason + "，CSV 中已包含该日数据");
+                return true;
+            } else {
+                String warning = "数据未更新！\n\n"
+                        + reason + "\n"
+                        + "但导出的 CSV 中没有该日期的数据（所有 ETF 均缺失）。\n\n"
+                        + "请先在通达信客户端中下载最新日线数据：\n"
+                        + "  选项 → 盘后数据下载\n"
+                        + "下载完成后再点击「刷新数据」。";
+                appendLog("⛔ 数据时效验证失败：" + reason);
+                appendLog("   CSV 中缺少该日期的数据，通达信可能未下载最新数据。");
+                Platform.runLater(() -> showAlert(Alert.AlertType.WARNING, "数据未更新", warning));
+                return false;
+            }
+
+        } catch (Exception e) {
+            appendLog("─".repeat(60));
+            appendLog("[信息] 无法验证数据时效性（数据库连接失败）: " + e.getMessage());
+            // 无法验证时不阻断，允许继续入库
+            return true;
         }
     }
 

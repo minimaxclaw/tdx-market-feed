@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""生成 tdx_calendar 表的 INSERT SQL（2015-01-01 ~ 2023-12-31）"""
+"""仅生成 tdx_calendar 假期 + 周末 INSERT SQL（2015-01-01 ~ 2023-12-31）"""
 
 from datetime import date, timedelta
 
 WEEKDAY_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 
-# 公众假期定义 (yyyy-mm-dd 范围 → 假期名称)
-# 注意：部分假期跨越年份（如元旦含上一年的12月），全都覆盖
+# ── 年份假期定义 (yyyy-mm-dd 开始, yyyy-mm-dd 结束, 假期名称) ──
+# 按官方放假安排精确整理
+
 HOLIDAYS = [
-    # ── 2015 ──
+    # === 2015 ===
     ("2015-01-01", "2015-01-03", "元旦"),
     ("2015-02-18", "2015-02-24", "春节"),
     ("2015-04-05", "2015-04-06", "清明节"),
@@ -17,7 +18,8 @@ HOLIDAYS = [
     ("2015-09-03", "2015-09-05", "抗战胜利日"),
     ("2015-09-27", "2015-09-27", "中秋节"),
     ("2015-10-01", "2015-10-07", "国庆节"),
-    # ── 2016 ──
+
+    # === 2016 ===
     ("2016-01-01", "2016-01-03", "元旦"),
     ("2016-02-07", "2016-02-13", "春节"),
     ("2016-04-02", "2016-04-04", "清明节"),
@@ -25,14 +27,16 @@ HOLIDAYS = [
     ("2016-06-09", "2016-06-11", "端午节"),
     ("2016-09-15", "2016-09-17", "中秋节"),
     ("2016-10-01", "2016-10-07", "国庆节"),
-    # ── 2017 ──
+
+    # === 2017 ===
     ("2016-12-31", "2017-01-02", "元旦"),
     ("2017-01-27", "2017-02-02", "春节"),
     ("2017-04-02", "2017-04-04", "清明节"),
     ("2017-04-29", "2017-05-01", "劳动节"),
     ("2017-05-28", "2017-05-30", "端午节"),
     ("2017-10-01", "2017-10-08", "国庆节、中秋节"),
-    # ── 2018 ──
+
+    # === 2018 ===
     ("2017-12-30", "2018-01-01", "元旦"),
     ("2018-02-15", "2018-02-21", "春节"),
     ("2018-04-05", "2018-04-07", "清明节"),
@@ -40,7 +44,8 @@ HOLIDAYS = [
     ("2018-06-16", "2018-06-18", "端午节"),
     ("2018-09-22", "2018-09-24", "中秋节"),
     ("2018-10-01", "2018-10-07", "国庆节"),
-    # ── 2019 ──
+
+    # === 2019 ===
     ("2018-12-30", "2019-01-01", "元旦"),
     ("2019-02-04", "2019-02-10", "春节"),
     ("2019-04-05", "2019-04-07", "清明节"),
@@ -48,14 +53,16 @@ HOLIDAYS = [
     ("2019-06-07", "2019-06-09", "端午节"),
     ("2019-09-13", "2019-09-15", "中秋节"),
     ("2019-10-01", "2019-10-07", "国庆节"),
-    # ── 2020 ──
+
+    # === 2020 ===
     ("2020-01-01", "2020-01-01", "元旦"),
     ("2020-01-24", "2020-01-30", "春节"),
     ("2020-04-04", "2020-04-06", "清明节"),
     ("2020-05-01", "2020-05-05", "劳动节"),
     ("2020-06-25", "2020-06-27", "端午节"),
     ("2020-10-01", "2020-10-08", "国庆节、中秋节"),
-    # ── 2021 ──
+
+    # === 2021 ===
     ("2021-01-01", "2021-01-03", "元旦"),
     ("2021-02-11", "2021-02-17", "春节"),
     ("2021-04-03", "2021-04-05", "清明节"),
@@ -63,7 +70,8 @@ HOLIDAYS = [
     ("2021-06-12", "2021-06-14", "端午节"),
     ("2021-09-19", "2021-09-21", "中秋节"),
     ("2021-10-01", "2021-10-07", "国庆节"),
-    # ── 2022 ──
+
+    # === 2022 ===
     ("2022-01-01", "2022-01-03", "元旦"),
     ("2022-01-31", "2022-02-06", "春节"),
     ("2022-04-03", "2022-04-05", "清明节"),
@@ -71,7 +79,8 @@ HOLIDAYS = [
     ("2022-06-03", "2022-06-05", "端午节"),
     ("2022-09-10", "2022-09-12", "中秋节"),
     ("2022-10-01", "2022-10-07", "国庆节"),
-    # ── 2023 ──
+
+    # === 2023 ===
     ("2022-12-31", "2023-01-02", "元旦"),
     ("2023-01-21", "2023-01-27", "春节"),
     ("2023-04-05", "2023-04-05", "清明节"),
@@ -86,7 +95,6 @@ def parse_date(s):
 
 
 def build_holiday_map():
-    """构建 date → holiday_name 的字典"""
     m = {}
     for start_s, end_s, name in HOLIDAYS:
         start = parse_date(start_s)
@@ -98,55 +106,73 @@ def build_holiday_map():
     return m
 
 
+def build_weekend_and_holiday_set(holiday_map):
+    """返回所有需要输出的日期集合（周末 + 假期）"""
+    result = set()
+    start = date(2015, 1, 1)
+    end = date(2023, 12, 31)
+
+    d = start
+    while d <= end:
+        wd = d.weekday()  # 0=Mon ... 6=Sun
+        if wd >= 5:  # 周六或周日
+            result.add(d)
+        d += timedelta(days=1)
+
+    # 加上所有假期（有些假期可能落在工作日）
+    result.update(holiday_map.keys())
+
+    return result
+
+
 def main():
     holiday_map = build_holiday_map()
+    to_output = build_weekend_and_holiday_set(holiday_map)
 
     start = date(2015, 1, 1)
     end = date(2023, 12, 31)
 
     lines = []
     lines.append("-- ============================================================")
-    lines.append("-- tdx_calendar 交易日历数据")
+    lines.append("-- tdx_calendar 假期 + 周末数据（不含普通工作日）")
     lines.append("-- 范围：2015-01-01 ~ 2023-12-31")
-    lines.append("-- 市场：CN（A股 — 上海和深圳）")
-    lines.append("-- 生成时间：自动生成")
+    lines.append("-- 市场：CN（A股）")
     lines.append("-- ============================================================")
     lines.append("")
 
-    # 按每100条一组提交
     batch = []
     total = 0
 
     d = start
     while d <= end:
-        date_str = d.strftime("%Y%m%d")
-        wd_idx = d.weekday()  # 0=Monday ... 6=Sunday
-        wd_cn = WEEKDAY_CN[wd_idx]
-        holiday = holiday_map.get(d)
+        if d in to_output:
+            date_str = d.strftime("%Y%m%d")
+            wd_cn = WEEKDAY_CN[d.weekday()]
+            holiday = holiday_map.get(d)
 
-        if holiday:
-            holiday_val = f"'{holiday}'"
-        else:
-            holiday_val = "NULL"
+            if holiday:
+                holiday_val = f"'{holiday}'"
+            else:
+                holiday_val = "NULL"
 
-        sql = f"INSERT INTO tdx_calendar (event_date, market, weekday, holiday_name) VALUES ('{date_str}', 'CN', '{wd_cn}', {holiday_val});"
-        batch.append(sql)
+            sql = (f"INSERT INTO tdx_calendar (event_date, market, weekday, holiday_name) "
+                   f"VALUES ('{date_str}', 'CN', '{wd_cn}', {holiday_val});")
+            batch.append(sql)
 
-        if len(batch) >= 100:
-            lines.extend(batch)
-            lines.append("")
-            batch = []
-            total += 100
+            if len(batch) >= 100:
+                lines.extend(batch)
+                lines.append("")
+                batch = []
+                total += 100
 
         d += timedelta(days=1)
 
-    # 剩余
     if batch:
         lines.extend(batch)
         lines.append("")
         total += len(batch)
 
-    lines.append(f"-- 总计 {total} 条记录")
+    lines.append(f"-- 总计 {total} 条（假期 + 周末，工作日已排除）")
     lines.append("COMMIT;")
 
     output_path = "/mnt/d/swdcode/work_idea/tdx-market-feed/sql/tdx_calendar_holiday_only.sql"
@@ -155,7 +181,8 @@ def main():
 
     print(f"✅ 生成完成：{output_path}")
     print(f"   总记录数：{total} 条")
-    print(f"   假期天数：{len(holiday_map)} 天")
+    print(f"   其中假期：{len(holiday_map)} 天")
+    print(f"   其中周末：{total - len(holiday_map)} 天")
 
 
 if __name__ == "__main__":
