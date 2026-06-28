@@ -17,6 +17,7 @@ import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 
 import java.io.File;
@@ -71,7 +72,12 @@ public class MainView {
         holidayTab.setClosable(false);
         holidayTab.setContent(buildHolidayPane(stage));
 
-        tabPane.getTabs().addAll(refreshTab, redTab, whiteTab, holidayTab);
+        // ── Tab 5：ETF类别 ────────────────────────────────────────────
+        Tab etfTypeTab = new Tab("ETF类别");
+        etfTypeTab.setClosable(false);
+        etfTypeTab.setContent(buildEtfTypePane(stage));
+
+        tabPane.getTabs().addAll(refreshTab, redTab, whiteTab, holidayTab, etfTypeTab);
 
         Scene scene = new Scene(tabPane, 820, 580);
         stage.setScene(scene);
@@ -114,7 +120,7 @@ public class MainView {
 
         Button btnCalcRps = new Button("计算RPS");
         btnCalcRps.setStyle("-fx-font-size: 14px;");
-        btnCalcRps.setOnAction(e -> appendLog("[信息] 计算RPS 功能开发中"));
+        btnCalcRps.setOnAction(e -> startRpsCalc(btnCalcRps));
 
         Button btnClearLog = new Button("清除日志");
         btnClearLog.setStyle("-fx-font-size: 14px;");
@@ -143,6 +149,126 @@ public class MainView {
         pane.setPadding(new Insets(14));
         pane.setAlignment(Pos.TOP_LEFT);
         return pane;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 「ETF类别」Tab
+    // ─────────────────────────────────────────────────────────────────────
+
+    /** 构建「ETF类别」Tab 的内容 */
+    private VBox buildEtfTypePane(Stage stage) {
+
+        // 日志区域先声明，以便按钮事件中引用
+        TextArea taEtfLog = new TextArea();
+        taEtfLog.setEditable(false);
+        taEtfLog.setWrapText(true);
+        taEtfLog.setStyle("-fx-font-family: 'Consolas', 'Courier New', monospace; -fx-font-size: 12px;");
+        VBox.setVgrow(taEtfLog, Priority.ALWAYS);
+
+        // ── 行1：数据文件 ──────────────────────────────────────────────
+        Label lblFile = new Label("数据文件：");
+        lblFile.setMinWidth(80);
+        TextField tfFile = new TextField();
+        HBox.setHgrow(tfFile, Priority.ALWAYS);
+        Button btnBrowseFile = new Button("浏览");
+        btnBrowseFile.setOnAction(e -> {
+            FileChooser chooser = new FileChooser();
+            chooser.setTitle("选择 ETF 分类文件");
+            chooser.getExtensionFilters().add(
+                    new FileChooser.ExtensionFilter("文本文件", "*.txt"));
+            File init = new File(tfFile.getText().trim());
+            if (init.getParentFile() != null && init.getParentFile().exists()) {
+                chooser.setInitialDirectory(init.getParentFile());
+            }
+            File chosen = chooser.showOpenDialog(stage);
+            if (chosen != null) tfFile.setText(chosen.getAbsolutePath());
+        });
+
+        HBox row1 = new HBox(8, lblFile, tfFile, btnBrowseFile);
+        row1.setAlignment(Pos.CENTER_LEFT);
+
+        // ── 行2：导入按钮 ──────────────────────────────────────────────
+        Label lblBlank = new Label();
+        lblBlank.setMinWidth(80);
+        Button btnImport = new Button("导入");
+        btnImport.setStyle("-fx-font-size: 14px;");
+        btnImport.setPrefWidth(100);
+        btnImport.setOnAction(e -> startImport(tfFile, btnImport, taEtfLog));
+
+        HBox row2 = new HBox(8, lblBlank, btnImport);
+        row2.setAlignment(Pos.CENTER_LEFT);
+
+        // ── 行3：日志标签 ─────────────────────────────────────────────
+        Label lblLog = new Label("运行日志：");
+
+        VBox pane = new VBox(10, row1, row2, lblLog, taEtfLog);
+        pane.setPadding(new Insets(14));
+        return pane;
+    }
+
+    /** 后台执行 ETF 分类文件导入 */
+    private void startImport(TextField tfFile, Button btnImport, TextArea taEtfLog) {
+        String filePath = tfFile.getText().trim();
+        if (filePath.isEmpty()) {
+            appendLogTo(taEtfLog, "[错误] 请先选择数据文件");
+            return;
+        }
+
+        File file = new File(filePath);
+        if (!file.exists()) {
+            appendLogTo(taEtfLog, "[错误] 文件不存在: " + filePath);
+            return;
+        }
+
+        btnImport.setDisable(true);
+        taEtfLog.clear();
+        appendLogTo(taEtfLog, "▶ 开始导入 ETF 分类数据...");
+        appendLogTo(taEtfLog, "  文件: " + filePath);
+        appendLogTo(taEtfLog, "─".repeat(60));
+
+        Task<Void> task = new Task<>() {
+            @Override
+            protected Void call() throws Exception {
+                long t0 = System.currentTimeMillis();
+                try (EtfProductService svc = new EtfProductService(
+                        DbConfig.load(), msg -> appendLogTo(taEtfLog, msg))) {
+                    EtfProductService.ImportStats stats = svc.importFile(file);
+                    long elapsed = System.currentTimeMillis() - t0;
+                    appendLogTo(taEtfLog, "─".repeat(60));
+                    appendLogTo(taEtfLog, "✅ 导入完成");
+                    appendLogTo(taEtfLog, "   总记录: " + stats.total()
+                            + "  新增: " + stats.inserted()
+                            + "  更新: " + stats.updated()
+                            + "  耗时: " + formatMs(elapsed));
+                } catch (Exception ex) {
+                    appendLogTo(taEtfLog, "[错误] " + ex.getMessage());
+                    throw ex;
+                }
+                return null;
+            }
+        };
+
+        task.setOnSucceeded(e -> {
+            btnImport.setDisable(false);
+        });
+        task.setOnFailed(e -> {
+            btnImport.setDisable(false);
+            Throwable ex = task.getException();
+            appendLogTo(taEtfLog, "❌ 导入失败: " + (ex != null ? ex.getMessage() : "未知错误"));
+            if (ex != null) ex.printStackTrace();
+        });
+
+        Thread thread = new Thread(task, "etf-type-import-thread");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    /** 向指定 TextArea 追加日志（线程安全） */
+    private void appendLogTo(TextArea area, String msg) {
+        Platform.runLater(() -> {
+            area.appendText(msg + "\n");
+            area.setScrollTop(Double.MAX_VALUE);
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -347,6 +473,45 @@ public class MainView {
         });
 
         Thread thread = new Thread(task, "etf-export-thread");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // RPS 计算入口
+    // ─────────────────────────────────────────────────────────────────────
+
+    private void startRpsCalc(Button btnCalcRps) {
+        btnCalcRps.setDisable(true);
+        appendLog("▶ 开始 RPS 计算...");
+        appendLog("─".repeat(60));
+
+        Task<Integer> task = new Task<>() {
+            @Override
+            protected Integer call() throws Exception {
+                try (RpsService rpsService = new RpsService(DbConfig.load(), MainView.this::appendLog)) {
+                    return rpsService.process();
+                } catch (Exception e) {
+                    appendLog("[错误] RPS 计算失败: " + e.getMessage());
+                    throw e;
+                }
+            }
+        };
+
+        task.setOnSucceeded(e -> {
+            btnCalcRps.setDisable(false);
+            int days = task.getValue();
+            appendLog("─".repeat(60));
+            appendLog("✅ RPS 计算完成，本次处理 " + days + " 个交易日");
+        });
+        task.setOnFailed(e -> {
+            btnCalcRps.setDisable(false);
+            Throwable ex = task.getException();
+            appendLog("❌ RPS 任务异常: " + (ex != null ? ex.getMessage() : "未知错误"));
+            if (ex != null) ex.printStackTrace();
+        });
+
+        Thread thread = new Thread(task, "rps-calc-thread");
         thread.setDaemon(true);
         thread.start();
     }

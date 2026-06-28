@@ -272,30 +272,94 @@ public class HolidayCalendarService {
      * 向前最多查找 30 天，若超出范围仍未找到则返回原日期。
      */
     public LocalDate findLastTradeDay(LocalDate date) throws SQLException {
-        LocalDate start = date.minusDays(30);
-        Set<String> nonTradeDays = new HashSet<>();
+        Set<String> nonTradeDays = queryNonTradeDaySet(date.minusDays(30), date);
 
-        try (Connection conn = getConnection();
-             PreparedStatement ps = conn.prepareStatement(NON_TRADE_DAYS_RANGE_SQL)) {
-            ps.setString(1, date.format(YYYYMMDD));
-            ps.setString(2, start.format(YYYYMMDD));
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    nonTradeDays.add(rs.getString(1));
-                }
-            }
-        }
-
-        // 从 date 向前找第一个不在非交易日集合中的日期
         LocalDate d = date;
-        while (!d.isBefore(start)) {
+        while (!d.isBefore(date.minusDays(30))) {
             if (!nonTradeDays.contains(d.format(YYYYMMDD))) {
                 return d;
             }
             d = d.minusDays(1);
         }
-
-        // 30 天内全是非交易日（极端情况），返回原日期
         return date;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 交易日区间查找（用于 RPS 计算）
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
+     * 查询指定日期范围内的非交易日集合（即 tdx_calendar 表中的日期）。
+     */
+    private Set<String> queryNonTradeDaySet(LocalDate from, LocalDate to) throws SQLException {
+        Set<String> result = new HashSet<>();
+        try (Connection conn = getConnection();
+             PreparedStatement ps = conn.prepareStatement(NON_TRADE_DAYS_RANGE_SQL)) {
+            ps.setString(1, to.format(YYYYMMDD));
+            ps.setString(2, from.format(YYYYMMDD));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    result.add(rs.getString(1));
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 找到截至 endDate（含）的最近 N 个交易日。
+     * 返回列表按时间升序排列（最早在前，endDate 在最后）。
+     * 最多向前查找 N*3 天，若不足则返回能找到的全部交易日。
+     */
+    public List<LocalDate> findLastNTradeDays(LocalDate endDate, int n) throws SQLException {
+        LocalDate from = endDate.minusDays(Math.max(90, n * 3L));
+        Set<String> nonTradeDays = queryNonTradeDaySet(from, endDate);
+
+        List<LocalDate> result = new ArrayList<>();
+        LocalDate d = endDate;
+        while (result.size() < n && !d.isBefore(from)) {
+            if (!nonTradeDays.contains(d.format(YYYYMMDD))) {
+                result.add(d);
+            }
+            d = d.minusDays(1);
+        }
+        Collections.reverse(result);
+        return result;
+    }
+
+    /**
+     * 找到指定日期之后的下一个交易日（不含 startExclusive 当天）。
+     * 若找不到（极端情况）则返回 null。
+     */
+    public LocalDate nextTradeDay(LocalDate startExclusive) throws SQLException {
+        LocalDate to = startExclusive.plusDays(30);
+        Set<String> nonTradeDays = queryNonTradeDaySet(startExclusive.plusDays(1), to);
+
+        LocalDate d = startExclusive.plusDays(1);
+        while (!d.isAfter(to)) {
+            if (!nonTradeDays.contains(d.format(YYYYMMDD))) {
+                return d;
+            }
+            d = d.plusDays(1);
+        }
+        return null;
+    }
+
+    /**
+     * 按时间顺序获取 startExclusive 之后（不含）的交易日列表，最多 maxCount 个。
+     */
+    public List<LocalDate> nextNTradeDays(LocalDate startExclusive, int maxCount) throws SQLException {
+        LocalDate to = startExclusive.plusDays(Math.max(90, maxCount * 3L));
+        Set<String> nonTradeDays = queryNonTradeDaySet(startExclusive.plusDays(1), to);
+
+        List<LocalDate> result = new ArrayList<>();
+        LocalDate d = startExclusive.plusDays(1);
+        while (result.size() < maxCount && !d.isAfter(to)) {
+            if (!nonTradeDays.contains(d.format(YYYYMMDD))) {
+                result.add(d);
+            }
+            d = d.plusDays(1);
+        }
+        return result;
     }
 }
